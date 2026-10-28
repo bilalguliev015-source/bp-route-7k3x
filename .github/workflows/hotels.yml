@@ -21,11 +21,14 @@ jobs:
 
       - name: Download Istanbul hotels from OpenStreetMap
         run: |
-          Q='[out:json][timeout:180];area["ISO3166-2"="TR-34"]->.a;(nwr["tourism"~"^(hotel|hostel|guest_house|apartment|motel)$"]["name"](area.a););out center tags;'
+          Q='[out:json][timeout:180];(nwr["tourism"~"^(hotel|hostel|guest_house|apartment|motel)$"]["name"](40.80,27.95,41.60,29.95););out center tags;'
+          UA="bp-route-planner/1.0 (+https://github.com/bilalguliev015-source/bp-route-7k3x)"
           ok=0
-          for host in https://overpass-api.de/api/interpreter https://overpass.kumi.systems/api/interpreter https://overpass-api.de/api/interpreter; do
-            if curl -sS -m 240 --data-urlencode "data=$Q" "$host" -o raw.json && jq -e '.elements | length > 500' raw.json > /dev/null; then ok=1; break; fi
-            sleep 30
+          for host in https://overpass-api.de/api/interpreter https://overpass.private.coffee/api/interpreter https://maps.mail.ru/osm/tools/overpass/api/interpreter https://overpass.kumi.systems/api/interpreter; do
+            echo "Trying $host"
+            if curl -sS -m 200 -A "$UA" -H "Accept: application/json" --data-urlencode "data=$Q" "$host" -o raw.json && jq -e '.elements | length > 500' raw.json > /dev/null 2>&1; then ok=1; echo "OK from $host"; break; fi
+            echo "Answer was:"; head -c 300 raw.json 2>/dev/null; echo
+            sleep 20
           done
           if [ "$ok" != 1 ]; then echo "Download failed, keeping the old list"; exit 1; fi
           jq -c '[.elements[] | {n:.tags.name, la:(.lat // .center.lat), lo:(.lon // .center.lon), a:([.tags["name:en"], .tags["name:tr"], .tags.alt_name, .tags.old_name, .tags.int_name] | map(select(. != null)) | join(";"))} | select(.la != null and .n != null) | [.n, ((.la*1e6|round)/1e6), ((.lo*1e6|round)/1e6), (.a | split(";") | map(select(length > 0)))]]' raw.json > hotels.json
