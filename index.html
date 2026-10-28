@@ -292,37 +292,47 @@ function allHotels(){return HOTELS.concat(custom,OSM)}
 let _idx=null,_idxN=-1;
 function index(){
   if(_idx&&_idxN===custom.length+OSM.length*1e4)return _idx;
-  const out=[];for(const h of allHotels()){const names=new Set([core(h[0]),...(h[3]||[]).map(core)]);for(const a of names)if(a)out.push([a,h])}
+  const out=[];for(const h of allHotels()){const names=new Set([core(h[0]),...(h[3]||[]).map(core)].filter(Boolean));const pre=new Set();
+    for(const a of names){out.push([a,h,0]);const w=a.split(" ");for(let k=1;k<w.length;k++){const p=w.slice(0,k).join(" ");if(p.length>=4&&!names.has(p))pre.add(p)}}
+    for(const p of pre)out.push([p,h,1])}
   _idxN=custom.length+OSM.length*1e4;return _idx=out;
 }
-function findHotel(text){
-  const key=core(text);if(!key)return null;
-  if(learned[key]){const h=allHotels().find(x=>x[0]===learned[key]);if(h)return{h,score:1,used:key.split(" ").length}}
-  const words=key.split(" ");let best=null;
+// all good matches for one line, best first
+function findHotels(text){
+  const key=core(text);if(!key)return[];
+  if(learned[key]){const h=allHotels().find(x=>x[0]===learned[key]);if(h)return[{h,score:2,used:key.split(" ").length}]}
+  const words=key.split(" "),byH=new Map();
   for(let k=Math.min(4,words.length);k>=1;k--){
     const pre=words.slice(0,k).join(" ");
-    for(const [a,h] of index()){
+    for(const [a,h,isPre] of index()){
       if(pre!==a&&Math.abs(pre.length-a.length)>Math.max(pre.length,a.length)*0.27)continue;
-      const s=(pre===a?1.01:sim(pre,a))-(h[4]?0.03:0);
-      if(!best||s>best.score||(s===best.score&&k>best.used))best={h,score:s,used:k};
+      const s=(pre===a?1.01:sim(pre,a))-(h[4]?0.03:0)-(isPre?0.06:0)+k*0.001;
+      const o=byH.get(h);if(!o||s>o.score)byH.set(h,{h,score:s,used:k});
     }
   }
-  return best&&best.score>=0.78?best:null;
+  const all=[...byH.values()].filter(x=>x.score>=0.78).sort((a,b)=>b.score-a.score);
+  return all.length?all.filter(x=>x.score>=all[0].score-0.06).slice(0,8):[];
 }
+function findHotel(text){return findHotels(text)[0]||null}
 
 // ===================== parse list =====================
 function parse(txt){
-  const stops=[],missing=[];
+  const rows=[],missing=[];
   for(const raw of txt.split(/\r?\n/)){
     const line=raw.replace(/^\s*\d+[.)]\s+/,"").trim();
     if(!line||/^[\d\s+.,-]+$/.test(line))continue;
-    const hit=findHotel(line);
-    if(hit){
-      const words=line.split(/\s+/);let dropped=0,skipping=true,rest=[];
-      for(const w of words){if(skipping){if(core(w)===""){continue}if(dropped<hit.used){dropped++;continue}skipping=false}rest.push(w)}
-      stops.push({name:hit.h[0],lat:hit.h[1],lng:hit.h[2],note:rest.join(" "),typed:line});
-    }else missing.push({typed:line});
+    const c=findHotels(line);
+    if(c.length)rows.push({line,c});else missing.push({typed:line});
   }
+  // when several hotels have the same name, take the one closest to the rest of the list
+  const sure=rows.filter(r=>r.c.length===1||r.c[0].score-r.c[1].score>=0.05).map(r=>r.c[0].h);
+  const anc=sure.length?{lat:sure.reduce((a,h)=>a+h[1],0)/sure.length,lng:sure.reduce((a,h)=>a+h[2],0)/sure.length}:{lat:41.012,lng:28.965};
+  const stops=rows.map(r=>{
+    const tw=new Set(norm(r.line).split(" ")),hit=r.c.map(x=>[x,x.score+norm(x.h[0]).split(" ").filter(w=>tw.has(w)&&!/^(hotel|hotels|otel|oteli|the|istanbul)$/.test(w)).reduce((a,w)=>a+(STOP.has(w)?0.1:0.01),0)-Math.min(0.2,hav(anc,{lat:x.h[1],lng:x.h[2]})/30000)]).sort((a,b)=>b[1]-a[1])[0][0];
+    const words=r.line.split(/\s+/);let dropped=0,skipping=true,rest=[];
+    for(const w of words){if(skipping){if(core(w)===""){continue}if(dropped<hit.used){dropped++;continue}skipping=false}rest.push(w)}
+    return{name:hit.h[0],lat:hit.h[1],lng:hit.h[2],note:rest.join(" "),typed:r.line};
+  });
   return {stops,missing};
 }
 
