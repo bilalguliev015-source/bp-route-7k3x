@@ -455,14 +455,15 @@ function addHotel(name,lat,lng,typed,auto){custom=custom.filter(x=>x[0]!==name);
 async function lookupMissing(){
   if(lookingUp)return;lookingUp=true;let changed=false,any=false;
   try{for(const g of groups)for(const m of g.missing){
-    const words=core(m.typed.replace(PAX," ").replace(/\d+\s*(€|\$|£|pound|euro|usd|tl)/gi," ")).split(" ").filter(w=>!/^\d+$/.test(w)).slice(0,3).join(" ");
+    const cut=m.typed.search(PAX),raw=cut>0?m.typed.slice(0,cut):m.typed;
+    const words=norm(raw.replace(/\d+\s*(€|\$|£|pound|euro|usd|tl)/gi," ")).split(" ").filter(w=>w&&!/^\d+$/.test(w)).slice(0,3).join(" ");
     if(!words)continue;any=true;
     let res=online[words];
     if(res===undefined){try{res=await photon(words);online[words]=res;store.set("pp-online",online)}catch(e){res=null}await new Promise(r=>setTimeout(r,300))}
     if(!res||!res.length)continue;
-    const two=words.split(" ").slice(0,2).join(" ");
+    const two=(core(words)||words).split(" ").slice(0,2).join(" ");
     const best=res.map(x=>[x,sim(two,core(x[0]).split(" ").slice(0,2).join(" ")||"~")]).sort((a,b)=>b[1]-a[1])[0];
-    if(best[1]>=0.7){addHotel(best[0][0],best[0][1],best[0][2],m.typed,true);changed=true}else m.sugg=res;
+    if(best[1]>=0.8&&two.length>=5){addHotel(best[0][0],best[0][1],best[0][2],m.typed,true);changed=true}else m.sugg=res;
   }}finally{lookingUp=false}
   if(changed)plan();else if(any)renderGroup();
 }
