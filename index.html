@@ -280,11 +280,22 @@ function core(s){return norm(s).split(" ").filter(w=>w&&!STOP.has(w)).join(" ")}
 function lev(a,b){const m=a.length,n=b.length;if(!m)return n;if(!n)return m;let p=Array(n+1).fill(0).map((_,i)=>i);for(let i=1;i<=m;i++){const c=[i];for(let j=1;j<=n;j++)c[j]=Math.min(p[j]+1,c[j-1]+1,p[j-1]+(a[i-1]===b[j-1]?0:1));p=c}return p[n]}
 function sim(a,b){return 1-lev(a,b)/Math.max(a.length,b.length)}
 
-function allHotels(){return HOTELS.concat(custom)}
+let OSM=[];try{const c=JSON.parse(localStorage.getItem("pp-osm")||"null");if(c&&Array.isArray(c.d))OSM=c.d}catch(e){}
+function allHotels(){return HOTELS.concat(custom,OSM)}
+async function loadOSM(){
+  for(const u of ["https://raw.githubusercontent.com/bilalguliev015-source/bp-route-7k3x/main/hotels.json?h="+Math.floor(Date.now()/36e5),"hotels.json"]){
+    try{const r=await fetch(u,{cache:"no-store"});if(!r.ok)continue;const d=await r.json();
+      if(Array.isArray(d)&&d.length>100){OSM=d.filter(x=>x&&x[0]&&x[1]).map(x=>[x[0],x[1],x[2],x[3]||[],1]);_idx=null;
+        try{localStorage.setItem("pp-osm",JSON.stringify({t:Date.now(),d:OSM}))}catch(e){}
+        if(document.getElementById("list").value.trim())plan();return}}catch(e){}
+  }
+}
+let _idx=null,_idxN=-1;
 function index(){
+  if(_idx&&_idxN===custom.length)return _idx;
   const out=[];
   for(const h of allHotels()){const names=new Set([core(h[0]),...h[3].map(core)]);for(const a of names)if(a)out.push([a,h])}
-  return out;
+  _idxN=custom.length;return _idx=out;
 }
 function findHotel(text){
   const key=core(text);
@@ -294,7 +305,8 @@ function findHotel(text){
   for(let k=Math.min(4,words.length);k>=1;k--){
     const pre=words.slice(0,k).join(" ");
     for(const [a,h] of idx){
-      const s=pre===a?1.01:sim(pre,a);
+      if(pre!==a&&Math.abs(pre.length-a.length)>Math.max(pre.length,a.length)*0.27)continue;
+      const s=(pre===a?1.01:sim(pre,a))-(h[4]?0.03:0);
       if(!best||s>best.score||(s===best.score&&k>best.used))best={h,score:s,used:k};
     }
   }
@@ -474,9 +486,9 @@ function renderGroup(){
   if(end)h+=`<li><span class="dot end">F</span><div class="nm">${esc(end.name)}</div><span></span></li>`;
   h+=`</ol></div>`;
   if(g.missing.length){
-    const opts=allHotels().map(x=>x[0]).sort((a,b)=>a.localeCompare(b,"tr")).map(n=>`<option>${esc(n)}</option>`).join("");
+    const optsFor=t=>{const k=core(t.replace(PAX," ")).split(" ").slice(0,2).join(" ")||"~";const seen=new Set();return allHotels().map(h=>[h[0],Math.max(...[h[0],...h[3]].map(n=>sim(k,core(n)||"~")))]).sort((a,b)=>b[1]-a[1]).filter(x=>!seen.has(x[0])&&seen.add(x[0])).slice(0,15).map(x=>`<option>${esc(x[0])}</option>`).join("")};
     h+=`<div class="miss"><h3>${g.missing.length} hotel${g.missing.length>1?"s":""} not recognized</h3><p class="tip">Choose the right hotel once and it's remembered on this phone.</p>`+
-      g.missing.map((m,i)=>`<div class="mrow"><div class="typed">${esc(m.typed)}</div><div class="two"><select id="fix${i}" data-t="${esc(m.typed)}" aria-label="Hotel for ${esc(m.typed)}"><option value="">Choose hotel…</option>${opts}</select><button class="btn small fix" type="button" data-i="${i}">Use</button></div><a href="${searchLink(m.typed.replace(PAX,""))}" target="_blank" rel="noopener">Find it in Google Maps</a></div>`).join("")+`</div>`;
+      g.missing.map((m,i)=>`<div class="mrow"><div class="typed">${esc(m.typed)}</div><div class="two"><select id="fix${i}" data-t="${esc(m.typed)}" aria-label="Hotel for ${esc(m.typed)}"><option value="">Choose hotel…</option>${optsFor(m.typed)}</select><button class="btn small fix" type="button" data-i="${i}">Use</button></div><a href="${searchLink(m.typed.replace(PAX,""))}" target="_blank" rel="noopener">Find it in Google Maps</a></div>`).join("")+`</div>`;
   }
   out.innerHTML=h;
   if(pts.length)makeMap(pts,start,end,rc&&rc.geom);
@@ -552,6 +564,7 @@ $("start").onchange=$("end").onchange=()=>{store.set("pp-se",[$("start").value,$
 let rt;addEventListener("resize",()=>{clearTimeout(rt);rt=setTimeout(()=>lmap&&lmap.invalidateSize(),200)});
 plan();
 if(!$("list").value.trim())setEditor(true);
+loadOSM();
 </script>
 </body>
 </html>
