@@ -1,0 +1,41 @@
+name: Update hotel list
+
+# Downloads every named hotel, hostel, guest house, apartment hotel and motel
+# in Istanbul from OpenStreetMap and saves it as hotels.json for the app.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/hotels.yml"
+  schedule:
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Istanbul hotels from OpenStreetMap
+        run: |
+          Q='[out:json][timeout:180];area["ISO3166-2"="TR-34"]->.a;(nwr["tourism"~"^(hotel|hostel|guest_house|apartment|motel)$"]["name"](area.a););out center tags;'
+          ok=0
+          for host in https://overpass-api.de/api/interpreter https://overpass.kumi.systems/api/interpreter https://overpass-api.de/api/interpreter; do
+            if curl -sS -m 240 --data-urlencode "data=$Q" "$host" -o raw.json && jq -e '.elements | length > 500' raw.json > /dev/null; then ok=1; break; fi
+            sleep 30
+          done
+          if [ "$ok" != 1 ]; then echo "Download failed, keeping the old list"; exit 1; fi
+          jq -c '[.elements[] | {n:.tags.name, la:(.lat // .center.lat), lo:(.lon // .center.lon), a:([.tags["name:en"], .tags["name:tr"], .tags.alt_name, .tags.old_name, .tags.int_name] | map(select(. != null)) | join(";"))} | select(.la != null and .n != null) | [.n, ((.la*1e6|round)/1e6), ((.lo*1e6|round)/1e6), (.a | split(";") | map(select(length > 0)))]]' raw.json > hotels.json
+          rm raw.json
+          echo "Hotels saved: $(jq length hotels.json)"
+
+      - name: Save the list
+        run: |
+          git config user.name "hotel-list-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add hotels.json
+          git diff --cached --quiet || git commit -m "Update Istanbul hotel list"
+          git push
