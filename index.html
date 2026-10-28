@@ -137,6 +137,7 @@ textarea,input,select{font-size:16px!important}
 .leaflet-container{font-family:var(--f-body)}
 .darktiles{filter:invert(1) hue-rotate(180deg) brightness(.9) contrast(.9)}
 .wait{opacity:.6}
+#tabs{display:none}
 </style>
 </head>
 <body>
@@ -154,7 +155,7 @@ textarea,input,select{font-size:16px!important}
     <section class="card editor" id="editor" hidden>
       <h2>Pickup list</h2>
       <textarea id="list" spellcheck="false" aria-label="Pickup list"></textarea>
-      <p class="tip">One hotel per line: <code>Dedem 10p Sabbir 170 pound</code>. A line with only crew names, like <code>İbo - Yusuf</code>, starts a new crew. The example list is from tonight's sheets.</p>
+      <p class="tip">Write one hotel name per line. The app puts them in the shortest order. Hotels it doesn't know yet are looked up on the map automatically.</p>
       <div class="two">
         <label for="start">Start from<select id="start"></select></label>
         <label for="end">Finish at<select id="end"></select></label>
@@ -321,10 +322,10 @@ function parse(txt){
   for(let raw of txt.split(/\r?\n/)){
     const line=raw.trim();
     if(!line||/^[\d\s+]+$/.test(line))continue;
-    if(/^[-–—_=#]{2,}/.test(line)){newGroup(line.replace(/^[-–—_=#\s]+/,"")||"");continue}
+    if(/^[-–—_=#]{2,}/.test(line))continue;
     const paxM=line.match(PAX);
     const hit=findHotel(line.replace(PAX," "));
-    if(!hit&&!paxM){newGroup(line);continue}
+
     if(!cur)newGroup("");
     const pax=paxM?paxM[1].replace(/\s/g,""):"";
     let rest=line.replace(PAX," ").trim().split(/\s+/);
@@ -334,7 +335,7 @@ function parse(txt){
       cur.stops.push({name:hit.h[0],lat:hit.h[1],lng:hit.h[2],pax,note:out.join(" "),typed:line});
     }else cur.missing.push({typed:line,pax});
   }
-  groups.forEach((g,i)=>{if(!g.title)g.title="Group "+(i+1)});
+  groups.forEach(g=>{g.title="Route"});
   return groups.filter(g=>g.stops.length||g.missing.length);
 }
 
@@ -481,7 +482,7 @@ function plan(){
   groups=parse($("list").value);
   if(active>=groups.length)active=0;
   const total=groups.reduce((s,g)=>s+g.stops.length,0);
-  $("subline").textContent=groups.length?`${groups.length} crew${groups.length>1?"s":""} · ${total} stops`:"Hotel pickups, in the shortest order";
+  $("subline").textContent=groups.length?`${total} stops`:"Hotel pickups, in the shortest order";
   renderTabs();renderGroup();lookupMissing();
   store.set("pp-list",$("list").value);store.set("pp-se",[$("start").value,$("end").value]);
 }
@@ -499,7 +500,7 @@ function renderGroup(){
   const pts=route(g.stops,start,end);COST=km;
   const line=[...(start?[start]:[]),...pts,...(end?[end]:[])];
   const gl=line.length>1?gmapsLinks(line):[];
-  let h=`<div class="stats"><div class="stat"><b>${pts.length}</b><span>stops</span></div><div class="stat"><b>${paxOf(g.stops)||"–"}</b><span>guests</span></div>${rc&&rc.dist!=null?`<div class="stat"><b>${rc.dist.toFixed(1)}</b><span>km · ~${rc.mins} min</span></div>`:`<div class="stat${rc&&rc.failed?"":" wait"}"><b>${pathLen(line).toFixed(1)}</b><span>${rc&&rc.failed?"km, rough":"km, checking roads…"}</span></div>`}</div>`;
+  let h=`<div class="stats"><div class="stat"><b>${pts.length}</b><span>stops</span></div>${rc&&rc.dist!=null?`<div class="stat"><b>${rc.dist.toFixed(1)}</b><span>km · ~${rc.mins} min</span></div>`:`<div class="stat${rc&&rc.failed?"":" wait"}"><b>${pathLen(line).toFixed(1)}</b><span>${rc&&rc.failed?"km, rough":"km, checking roads…"}</span></div>`}</div>`;
   if(pts.length)h+=`<div class="map"><div id="lmap" role="region" aria-label="Street map of the stops"></div></div>`;
   if(gl.length>1)h+=`<div class="card"><p class="tip">Google Maps takes up to 10 stops at once, so this route is split:</p><div class="parts">${gl.map((u,i)=>`<a href="${u}" target="_blank" rel="noopener">Part ${i+1}</a>`).join("")}</div></div>`;
   h+=`<div class="card"><h2 class="sec">Pickup order</h2><ol class="tl">`;
