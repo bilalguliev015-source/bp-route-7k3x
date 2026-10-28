@@ -444,6 +444,29 @@ async function fetchRoad(key,g,start,end){
   if(currentKey===key)renderGroup();
 }
 
+
+// ---------- online lookup for unknown hotels (OpenStreetMap via Photon) ----------
+let online=store.get("pp-online",{});let autoNames=new Set(store.get("pp-auto",[]));let lookingUp=false;
+async function photon(q){const r=await fetch("https://photon.komoot.io/api/?q="+encodeURIComponent(q)+"&lat=41.01&lon=28.97&limit=5&bbox=27.95,40.80,29.95,41.60&osm_tag=tourism");if(!r.ok)throw 0;const j=await r.json();
+  return j.features.filter(f=>f.properties&&f.properties.name).map(f=>[f.properties.name,+f.geometry.coordinates[1].toFixed(6),+f.geometry.coordinates[0].toFixed(6),f.properties.district||f.properties.locality||f.properties.city||""])}
+function addHotel(name,lat,lng,typed,auto){custom=custom.filter(x=>x[0]!==name);custom.push([name,lat,lng,[name]]);store.set("pp-custom",custom);
+  const k=core(typed.replace(PAX," ")),w=k.split(" ");learned[w.slice(0,Math.min(2,w.length)).join(" ")]=name;learned[k]=name;store.set("pp-learned",learned);
+  if(auto){autoNames.add(name);store.set("pp-auto",[...autoNames])}_idx=null}
+async function lookupMissing(){
+  if(lookingUp)return;lookingUp=true;let changed=false,any=false;
+  try{for(const g of groups)for(const m of g.missing){
+    const words=core(m.typed.replace(PAX," ").replace(/\d+\s*(€|\$|£|pound|euro|usd|tl)/gi," ")).split(" ").filter(w=>!/^\d+$/.test(w)).slice(0,3).join(" ");
+    if(!words)continue;any=true;
+    let res=online[words];
+    if(res===undefined){try{res=await photon(words);online[words]=res;store.set("pp-online",online)}catch(e){res=null}await new Promise(r=>setTimeout(r,300))}
+    if(!res||!res.length)continue;
+    const two=words.split(" ").slice(0,2).join(" ");
+    const best=res.map(x=>[x,sim(two,core(x[0]).split(" ").slice(0,2).join(" ")||"~")]).sort((a,b)=>b[1]-a[1])[0];
+    if(best[1]>=0.7){addHotel(best[0][0],best[0][1],best[0][2],m.typed,true);changed=true}else m.sugg=res;
+  }}finally{lookingUp=false}
+  if(changed)plan();else if(any)renderGroup();
+}
+
 // ---------- render ----------
 let groups=[],active=0;
 const $=id=>document.getElementById(id);
@@ -458,7 +481,7 @@ function plan(){
   if(active>=groups.length)active=0;
   const total=groups.reduce((s,g)=>s+g.stops.length,0);
   $("subline").textContent=groups.length?`${groups.length} crew${groups.length>1?"s":""} · ${total} stops`:"Hotel pickups, in the shortest order";
-  renderTabs();renderGroup();
+  renderTabs();renderGroup();lookupMissing();
   store.set("pp-list",$("list").value);store.set("pp-se",[$("start").value,$("end").value]);
 }
 function renderTabs(){
@@ -481,14 +504,14 @@ function renderGroup(){
   h+=`<div class="card"><h2 class="sec">Pickup order</h2><ol class="tl">`;
   if(start)h+=`<li><span class="dot end">S</span><div class="nm">${esc(start.name)}</div><span></span></li>`;
   pts.forEach((p,i)=>{
-    const tags=p.parts.map(x=>(x.pax?`<span class="tag pax">${esc(x.pax)} pax</span>`:"")+(x.note?`<span class="tag">${esc(x.note)}</span>`:"")).join("");
+    const tags=(autoNames.has(p.name)?`<span class="tag" style="background:var(--warn-tint);color:var(--warn)">found online, check</span>`:"")+p.parts.map(x=>(x.pax?`<span class="tag pax">${esc(x.pax)} pax</span>`:"")+(x.note?`<span class="tag">${esc(x.note)}</span>`:"")).join("");
     h+=`<li data-i="${i}"><span class="dot">${i+1}</span><div style="min-width:0"><div class="nm">${esc(p.name)}</div>${tags?`<div class="meta">${tags}</div>`:""}</div><a class="nav" href="${navLink(p)}" target="_blank" rel="noopener">Go</a></li>`});
   if(end)h+=`<li><span class="dot end">F</span><div class="nm">${esc(end.name)}</div><span></span></li>`;
   h+=`</ol></div>`;
   if(g.missing.length){
     const optsFor=t=>{const k=core(t.replace(PAX," ")).split(" ").slice(0,2).join(" ")||"~";const seen=new Set();return allHotels().map(h=>[h[0],Math.max(...[h[0],...h[3]].map(n=>sim(k,core(n)||"~")))]).sort((a,b)=>b[1]-a[1]).filter(x=>!seen.has(x[0])&&seen.add(x[0])).slice(0,15).map(x=>`<option>${esc(x[0])}</option>`).join("")};
     h+=`<div class="miss"><h3>${g.missing.length} hotel${g.missing.length>1?"s":""} not recognized</h3><p class="tip">Choose the right hotel once and it's remembered on this phone.</p>`+
-      g.missing.map((m,i)=>`<div class="mrow"><div class="typed">${esc(m.typed)}</div><div class="two"><select id="fix${i}" data-t="${esc(m.typed)}" aria-label="Hotel for ${esc(m.typed)}"><option value="">Choose hotel…</option>${optsFor(m.typed)}</select><button class="btn small fix" type="button" data-i="${i}">Use</button></div><a href="${searchLink(m.typed.replace(PAX,""))}" target="_blank" rel="noopener">Find it in Google Maps</a></div>`).join("")+`</div>`;
+      g.missing.map((m,i)=>`<div class="mrow"><div class="typed">${esc(m.typed)}</div><div class="two"><select id="fix${i}" data-t="${esc(m.typed)}" aria-label="Hotel for ${esc(m.typed)}"><option value="">Choose hotel…</option>${optsFor(m.typed)}</select><button class="btn small fix" type="button" data-i="${i}">Use</button></div>${(m.sugg||[]).length?`<div class="tip">Close matches on the map:</div><div style="display:flex;flex-wrap:wrap;gap:6px">${m.sugg.map((s,j)=>`<button type="button" class="btn line small sug" data-i="${i}" data-j="${j}">${esc(s[0])}${s[3]?" · "+esc(s[3]):""}</button>`).join("")}</div>`:""}<a href="${searchLink(m.typed.replace(PAX,""))}" target="_blank" rel="noopener">Find it in Google Maps</a></div>`).join("")+`</div>`;
   }
   out.innerHTML=h;
   if(pts.length)makeMap(pts,start,end,rc&&rc.geom);
@@ -503,6 +526,7 @@ function renderGroup(){
       if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(text).then(done,()=>fallbackCopy(text,done));else fallbackCopy(text,done);
     };
   }else $("dock").hidden=true;
+  out.querySelectorAll(".sug").forEach(b=>b.onclick=()=>{const m=g.missing[+b.dataset.i],s=m&&m.sugg&&m.sugg[+b.dataset.j];if(!s)return;addHotel(s[0],s[1],s[2],m.typed,false);plan();toast("Saved "+s[0])});
   out.querySelectorAll(".fix").forEach(b=>b.onclick=()=>{const sel=$("fix"+b.dataset.i);if(!sel.value){toast("Choose a hotel first");return}
     const typed=sel.dataset.t.replace(PAX," "),w=core(typed).split(" ");learned[w.slice(0,Math.min(2,w.length)).join(" ")]=sel.value;learned[core(typed)]=sel.value;store.set("pp-learned",learned);plan();toast("Saved")});
 }
