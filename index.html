@@ -544,7 +544,7 @@ Revia Square 4p Abbes
 Taxim Town 2p 304`;
 for(const sel of ["start","end"])$(sel).innerHTML=Object.entries(PLACES).map(([k,v])=>`<option value="${k}">${esc(k==="none"?(sel==="end"?"Last pickup":"Planner picks"):v[0])}</option>`).join("");
 const se=store.get("pp-se",["none","none"]);$("start").value=se[0]||"none";$("end").value=se[1]||"none";
-$("list").value=store.get("pp-list",SAMPLE);
+$("list").value="";
 $("toggle").onclick=()=>setEditor($("editor").hidden);
 $("plan").onclick=()=>{plan();if(!wide()){setEditor(false);scrollTo({top:0,behavior:"smooth"})}};
 $("clear").onclick=()=>{$("list").value="";plan();$("list").focus()};
