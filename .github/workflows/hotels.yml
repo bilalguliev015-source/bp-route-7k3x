@@ -1,7 +1,8 @@
-name: Update hotel list
+name: Update map data
 
-# Downloads every named hotel, hostel, guest house, apartment hotel and motel
-# in Istanbul from OpenStreetMap and saves it as hotels.json for the app.
+# Every Monday: downloads the OpenStreetMap file for Turkey and saves
+#  hotels.json - every named hotel, hostel, guest house and apart hotel in Istanbul
+#  roads.json  - main roads and bus parkings in central Istanbul (for bus stops)
 on:
   workflow_dispatch:
   push:
@@ -19,26 +20,67 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download Istanbul hotels from OpenStreetMap
-        run: |
-          Q='[out:json][timeout:180];(nwr["tourism"~"^(hotel|hostel|guest_house|apartment|motel)$"]["name"](40.80,27.95,41.60,29.95););out center tags;'
-          UA="bp-route-planner/1.0 (+https://github.com/bilalguliev015-source/bp-route-7k3x)"
-          ok=0
-          for host in https://overpass-api.de/api/interpreter https://overpass.private.coffee/api/interpreter https://maps.mail.ru/osm/tools/overpass/api/interpreter https://overpass.kumi.systems/api/interpreter; do
-            echo "Trying $host"
-            if curl -sS -m 200 -A "$UA" -H "Accept: application/json" --data-urlencode "data=$Q" "$host" -o raw.json && jq -e '.elements | length > 500' raw.json > /dev/null 2>&1; then ok=1; echo "OK from $host"; break; fi
-            echo "Answer was:"; head -c 300 raw.json 2>/dev/null; echo
-            sleep 20
-          done
-          if [ "$ok" != 1 ]; then echo "Download failed, keeping the old list"; exit 1; fi
-          jq -c '[.elements[] | {n:.tags.name, la:(.lat // .center.lat), lo:(.lon // .center.lon), a:([.tags["name:en"], .tags["name:tr"], .tags.alt_name, .tags.old_name, .tags.int_name] | map(select(. != null)) | join(";"))} | select(.la != null and .n != null) | [.n, ((.la*1e6|round)/1e6), ((.lo*1e6|round)/1e6), (.a | split(";") | map(select(length > 0)))]]' raw.json > hotels.json
-          rm raw.json
-          echo "Hotels saved: $(jq length hotels.json)"
+      - name: Install osmium
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq osmium-tool
 
-      - name: Save the list
+      - name: Download Turkey map
+        run: curl -sSfL --retry 3 -o tr.pbf https://download.geofabrik.de/europe/turkey-latest.osm.pbf && ls -lh tr.pbf
+
+      - name: Cut out Istanbul
         run: |
-          git config user.name "hotel-list-bot"
+          osmium extract -b 27.95,40.80,29.95,41.60 tr.pbf -o ist.pbf
+          osmium tags-filter ist.pbf nwr/tourism=hotel,hostel,guest_house,apartment,motel -o h.pbf
+          osmium export h.pbf -f geojsonseq --format-option print_record_separator=false -o h.jsonl
+          osmium extract -b 28.80,40.95,29.15,41.12 ist.pbf -o c.pbf
+          osmium tags-filter c.pbf w/highway=trunk,trunk_link,primary,primary_link,secondary,secondary_link,tertiary,tertiary_link nwr/amenity=parking -o r.pbf
+          osmium export r.pbf -f geojsonseq --format-option print_record_separator=false -o r.jsonl
+
+      - name: Make app files
+        run: |
+          python3 - <<'PY'
+          import json
+          def centre(g):
+              t=g["type"];c=g["coordinates"]
+              if t=="Point": return c
+              if t=="LineString": pts=c
+              elif t=="Polygon": pts=c[0]
+              elif t=="MultiPolygon": pts=c[0][0]
+              else: return None
+              return [sum(p[0] for p in pts)/len(pts), sum(p[1] for p in pts)/len(pts)]
+          hotels={}
+          for line in open("h.jsonl",encoding="utf-8"):
+              f=json.loads(line);p=f.get("properties") or {}
+              n=p.get("name")
+              if not n or p.get("tourism") not in ("hotel","hostel","guest_house","apartment","motel"): continue
+              c=centre(f["geometry"])
+              if not c: continue
+              al=[p[k] for k in ("name:en","name:tr","alt_name","old_name","int_name","brand") if p.get(k) and p.get(k)!=n]
+              key=(n,round(c[1],3),round(c[0],3))
+              hotels[key]=[n,round(c[1],6),round(c[0],6),al]
+          json.dump(list(hotels.values()),open("hotels.json","w",encoding="utf-8"),ensure_ascii=False,separators=(",",":"))
+          ways=[];parks=[]
+          for line in open("r.jsonl",encoding="utf-8"):
+              f=json.loads(line);p=f.get("properties") or {};g=f["geometry"]
+              if p.get("amenity")=="parking":
+                  if p.get("bus") in ("yes","designated") or p.get("hgv") in ("yes","designated") or "otob" in (p.get("name") or "").lower():
+                      c=centre(g)
+                      if c: parks.append([round(c[1],5),round(c[0],5),p.get("name") or "Bus parking"])
+                  continue
+              hw=p.get("highway")
+              if not hw or g["type"]!="LineString": continue
+              pts=[]
+              for x,y in g["coordinates"]: pts+= [round(y*1e5),round(x*1e5)]
+              ways.append([p.get("name") or "",hw.replace("_link",""),pts])
+          json.dump({"w":ways,"p":parks},open("roads.json","w",encoding="utf-8"),ensure_ascii=False,separators=(",",":"))
+          print("hotels",len(hotels),"roads",len(ways),"parkings",len(parks))
+          PY
+          ls -lh hotels.json roads.json
+          rm -f *.pbf *.jsonl
+
+      - name: Save
+        run: |
+          git config user.name "map-data-bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add hotels.json
-          git diff --cached --quiet || git commit -m "Update Istanbul hotel list"
+          git add hotels.json roads.json
+          git diff --cached --quiet || git commit -m "Update map data"
           git push
